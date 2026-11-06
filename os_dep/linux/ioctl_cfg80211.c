@@ -1934,11 +1934,18 @@ static int cfg80211_rtw_add_key(struct wiphy *wiphy,
 	, int link_id
 #endif
 	, u8 key_index
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 37)) || defined(COMPAT_KERNEL_RELEASE)
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(7, 4, 0))
+	/* upstream 3191dfbf0779: key type replaces the pairwise flag */
+	, enum nl80211_key_type type
+#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 37)) || defined(COMPAT_KERNEL_RELEASE)
 	, bool pairwise
 #endif
 	, const u8 *mac_addr, struct key_params *params)
 {
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(7, 4, 0))
+	/* only GROUP or PAIRWISE get here: a CIGTK needs cip_supported */
+	bool pairwise = type == NL80211_KEYTYPE_PAIRWISE;
+#endif
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(7, 1, 0))
 	/* P2P device wdev (NL80211_IFTYPE_P2P_DEVICE) has no netdev */
 	struct net_device *ndev = wdev_to_ndev(wdev);
@@ -2112,12 +2119,19 @@ static int cfg80211_rtw_get_key(struct wiphy *wiphy,
 	, int link_id
 #endif
 	, u8 keyid
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 37)) || defined(COMPAT_KERNEL_RELEASE)
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(7, 4, 0))
+	/* upstream 3191dfbf0779: key type replaces the pairwise flag */
+	, enum nl80211_key_type type
+#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 37)) || defined(COMPAT_KERNEL_RELEASE)
 	, bool pairwise
 #endif
 	, const u8 *mac_addr, void *cookie
 	, void (*callback)(void *cookie, struct key_params *))
 {
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(7, 4, 0))
+	/* only GROUP or PAIRWISE get here: a CIGTK needs cip_supported */
+	bool pairwise = type == NL80211_KEYTYPE_PAIRWISE;
+#endif
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(7, 1, 0))
 	/* P2P device wdev (NL80211_IFTYPE_P2P_DEVICE) has no netdev */
 	struct net_device *ndev = wdev_to_ndev(wdev);
@@ -2315,7 +2329,10 @@ static int cfg80211_rtw_del_key(struct wiphy *wiphy,
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0))
 				int link_id,
 #endif
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 37)) || defined(COMPAT_KERNEL_RELEASE)
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(7, 4, 0))
+				/* upstream 3191dfbf0779: key type replaces the pairwise flag */
+				u8 key_index, enum nl80211_key_type type, const u8 *mac_addr)
+#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 37)) || defined(COMPAT_KERNEL_RELEASE)
 				u8 key_index, bool pairwise, const u8 *mac_addr)
 #else	/* (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 37)) */
 				u8 key_index, const u8 *mac_addr)
