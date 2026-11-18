@@ -1504,7 +1504,7 @@ static int rtw_wx_set_pmkid(struct net_device *dev,
 
 				_rtw_memcpy(psecuritypriv->PMKIDList[j].PMKID, pPMK->pmkid, IW_PMKID_LEN);
 				psecuritypriv->PMKIDList[j].bUsed = _TRUE;
-				psecuritypriv->PMKIDIndex = j + 1;
+				psecuritypriv->PMKIDIndex = (j + 1) % NUM_PMKID_CACHE;
 				blInserted = _TRUE;
 				break;
 			}
@@ -1520,7 +1520,7 @@ static int rtw_wx_set_pmkid(struct net_device *dev,
 
 			psecuritypriv->PMKIDList[psecuritypriv->PMKIDIndex].bUsed = _TRUE;
 			psecuritypriv->PMKIDIndex++ ;
-			if (psecuritypriv->PMKIDIndex == 16)
+			if (psecuritypriv->PMKIDIndex == NUM_PMKID_CACHE)
 				psecuritypriv->PMKIDIndex = 0;
 		}
 	} else if (pPMK->cmd == IW_PMKSA_REMOVE) {

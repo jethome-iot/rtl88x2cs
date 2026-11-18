@@ -4790,7 +4790,7 @@ static void _rtw_set_pmksa(struct net_device *ndev,
 
 			_rtw_memcpy(psecuritypriv->PMKIDList[index].PMKID, pmkid, WLAN_PMKID_LEN);
 			psecuritypriv->PMKIDList[index].bUsed = _TRUE;
-			psecuritypriv->PMKIDIndex = index + 1;
+			psecuritypriv->PMKIDIndex = (index + 1) % NUM_PMKID_CACHE;
 			blInserted = _TRUE;
 			break;
 		}
@@ -4806,7 +4806,7 @@ static void _rtw_set_pmksa(struct net_device *ndev,
 
 		psecuritypriv->PMKIDList[psecuritypriv->PMKIDIndex].bUsed = _TRUE;
 		psecuritypriv->PMKIDIndex++ ;
-		if (psecuritypriv->PMKIDIndex == 16)
+		if (psecuritypriv->PMKIDIndex == NUM_PMKID_CACHE)
 			psecuritypriv->PMKIDIndex = 0;
 	}
 }
