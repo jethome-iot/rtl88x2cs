@@ -25,6 +25,14 @@
   ],
   "customManagers": [
     {
+      "description": "Tools that workflows download from a GitHub release, marked by a `# renovate:` comment line right above a `NAME: <tag> <sha256>` line. Renovate moves the tag and takes the new SHA256 from the release's checksums file.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>github-release-attachments)\\s+depName=(?<depName>\\S+)[^\\n]*\\n\\s*\\w+:\\s*(?<currentValue>v\\d[\\w.+-]*)\\s+(?<currentDigest>[a-f0-9]{64})\\s*\\n"
+      ]
+    },
+    {
       "description": "The Renovate image in its own workflow, pinned by digest.",
       "customType": "regex",
       "managerFilePatterns": ["/^\\.github/workflows/renovate\\.yml$/"],
