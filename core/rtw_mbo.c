@@ -549,7 +549,7 @@ static void  rtw_mbo_non_pref_chans_del(
 }
 
 ssize_t rtw_mbo_proc_non_pref_chans_set(
-	struct file *pfile, const char __user *buffer, 
+	struct file *pfile, const char __rtw_proc_user *buffer, 
 	size_t count, loff_t *pos, void *pdata)
 {
 	struct net_device *dev = pdata;
@@ -565,7 +565,7 @@ ssize_t rtw_mbo_proc_non_pref_chans_set(
 		return -EFAULT;
 	}
 
-	if (buffer && !copy_from_user(tmp, buffer, count)) {
+	if (buffer && !rtw_proc_copy_in(tmp, buffer, count)) {
 		if (strncmp(tmp, "add", 3) == 0)
 			rtw_mbo_non_pref_chans_set(padapter, &tmp[4], (count - 4));
 		else if (strncmp(tmp, "delete", 6) == 0)
@@ -623,7 +623,7 @@ int rtw_mbo_proc_non_pref_chans_get(
 }
 
 ssize_t rtw_mbo_proc_cell_data_set(
-	struct file *pfile, const char __user *buffer,
+	struct file *pfile, const char __rtw_proc_user *buffer,
 	size_t count, loff_t *pos, void *pdata)
 {
 	struct net_device *dev = pdata;
@@ -638,7 +638,7 @@ ssize_t rtw_mbo_proc_cell_data_set(
 	if (count > sizeof(tmp))
 		return -EFAULT;
 
-	if (buffer && !copy_from_user(tmp, buffer, count)) {
+	if (buffer && !rtw_proc_copy_in(tmp, buffer, count)) {
 		int num = sscanf(tmp, "%d", &mbo_cell_data);
 		if (num == 1) {
 			rtw_mbo_cell_data_conn = mbo_cell_data;

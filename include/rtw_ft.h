@@ -137,7 +137,7 @@ void rtw_ft_info_init(struct ft_roam_info *pft);
 
 int rtw_ft_proc_flags_get(struct seq_file *m, void *v);
 
-ssize_t rtw_ft_proc_flags_set(struct file *file, const char __user *buffer,
+ssize_t rtw_ft_proc_flags_set(struct file *file, const char __rtw_proc_user *buffer,
 	size_t count, loff_t *pos, void *data);
 
 u8 rtw_ft_chk_roaming_candidate(
