@@ -18,6 +18,19 @@
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 
+/*
+ * The proc files of the driver read through ->proc_read() and write through
+ * ->proc_write() with a user buffer. 4b0ecffbbece ("proc: drop ->proc_write()")
+ * and 3a1f98a6a371 ("proc: drop ->proc_read() and ->proc_read_iter()") remove
+ * both: procfs owns the seq_file and copies writes in. Do not create the proc
+ * files there. The same series adds PROC_IOCTL_ARG() to <linux/proc_fs.h>;
+ * test for it instead of the kernel version, linux-next reports the version
+ * of the last -rc until the merge window closes.
+ */
+#if defined(CONFIG_PROC_DEBUG) && !defined(PROC_IOCTL_ARG)
+#define RTW_PROC_FILES
+#endif
+
 #define RTW_PROC_HDL_TYPE_SEQ	0
 #define RTW_PROC_HDL_TYPE_SSEQ	1
 #define RTW_PROC_HDL_TYPE_SZSEQ	2
@@ -51,7 +64,7 @@ struct rtw_proc_hdl {
 #define rtw_proc_ops file_operations
 #endif
 
-#ifdef CONFIG_PROC_DEBUG
+#ifdef RTW_PROC_FILES
 
 int rtw_drv_proc_init(void);
 void rtw_drv_proc_deinit(void);
@@ -59,7 +72,7 @@ struct proc_dir_entry *rtw_adapter_proc_init(struct net_device *dev);
 void rtw_adapter_proc_deinit(struct net_device *dev);
 void rtw_adapter_proc_replace(struct net_device *dev);
 
-#else /* !CONFIG_PROC_DEBUG */
+#else /* !RTW_PROC_FILES */
 
 static inline int rtw_drv_proc_init(void) {return _FAIL;}
 #define rtw_drv_proc_deinit() do {} while (0)
@@ -67,6 +80,6 @@ static inline struct proc_dir_entry *rtw_adapter_proc_init(struct net_device *de
 #define rtw_adapter_proc_deinit(dev) do {} while (0)
 #define rtw_adapter_proc_replace(dev) do {} while (0)
 
-#endif /* !CONFIG_PROC_DEBUG */
+#endif /* !RTW_PROC_FILES */
 
 #endif /* __RTW_PROC_H__ */

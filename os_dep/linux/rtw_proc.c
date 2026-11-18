@@ -19,7 +19,7 @@
 #include "rtw_proc.h"
 #include <rtw_btcoex.h>
 
-#ifdef CONFIG_PROC_DEBUG
+#ifdef RTW_PROC_FILES
 
 static struct proc_dir_entry *rtw_proc = NULL;
 
@@ -5478,4 +5478,4 @@ void rtw_adapter_proc_replace(struct net_device *dev)
 
 }
 
-#endif /* CONFIG_PROC_DEBUG */
+#endif /* RTW_PROC_FILES */
