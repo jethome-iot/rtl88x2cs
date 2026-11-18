@@ -6770,7 +6770,10 @@ static int	cfg80211_rtw_assoc(struct wiphy *wiphy, struct net_device *ndev,
 
 void rtw_cfg80211_external_auth_request(_adapter *padapter, union recv_frame *rframe)
 {
-	struct rtw_external_auth_params params;
+#if (KERNEL_VERSION(4, 17, 0) <= LINUX_VERSION_CODE) \
+    || defined(CONFIG_KERNEL_PATCH_EXTERNAL_AUTH)
+	struct cfg80211_external_auth_params params;
+#endif
 	struct wireless_dev *wdev = padapter->rtw_wdev;
 	struct net_device *netdev = wdev_to_ndev(wdev);
 	struct mlme_ext_priv *pmlmeext = &(padapter->mlmeextpriv);
@@ -6786,15 +6789,21 @@ void rtw_cfg80211_external_auth_request(_adapter *padapter, union recv_frame *rf
 
 #if (KERNEL_VERSION(4, 17, 0) <= LINUX_VERSION_CODE) \
     || defined(CONFIG_KERNEL_PATCH_EXTERNAL_AUTH)
-	params.action = EXTERNAL_AUTH_START;
+	/*
+	 * cfg80211 reads every field of its own structure (pmkid since 5.1,
+	 * mld_addr since 6.3), so build that structure and zero the fields
+	 * this driver does not set.
+	 */
+	_rtw_memset(&params, 0, sizeof(params));
+	params.action = NL80211_EXTERNAL_AUTH_START;
 	_rtw_memcpy(params.bssid, get_my_bssid(&pmlmeinfo->network), ETH_ALEN);
 	params.ssid.ssid_len = pmlmeinfo->network.Ssid.SsidLength;
 	_rtw_memcpy(params.ssid.ssid, pmlmeinfo->network.Ssid.Ssid,
 		pmlmeinfo->network.Ssid.SsidLength);
+	/* SAE AKM 00-0F-AC:8 in the byte order wpa_supplicant has always accepted */
 	params.key_mgmt_suite = 0x8ac0f00;
 
-	cfg80211_external_auth_request(netdev,
-		(struct cfg80211_external_auth_params *)&params, GFP_ATOMIC);
+	cfg80211_external_auth_request(netdev, &params, GFP_ATOMIC);
 #elif (KERNEL_VERSION(2, 6, 37) <= LINUX_VERSION_CODE)
 	set_frame_sub_type(frame, WIFI_AUTH);
 
@@ -10489,11 +10498,26 @@ static int cfg80211_rtw_external_auth(struct wiphy *wiphy, struct net_device *de
 	struct cfg80211_external_auth_params *params)
 {
 	PADAPTER padapter = (_adapter *)rtw_netdev_priv(dev);
+	struct rtw_external_auth_params rtw_params;
 
 	RTW_INFO(FUNC_NDEV_FMT"\n", FUNC_NDEV_ARG(dev));
 
-	rtw_cfg80211_external_auth_status(wiphy, dev,
-		(struct rtw_external_auth_params *)params);
+	/*
+	 * The layouts differ: cfg80211 carries pmkid as a pointer (5.1+),
+	 * rtw_external_auth_params as an array. Copy field by field.
+	 */
+	_rtw_memset(&rtw_params, 0, sizeof(rtw_params));
+	rtw_params.action = (enum external_auth_action)params->action;
+	_rtw_memcpy(rtw_params.bssid, params->bssid, ETH_ALEN);
+	rtw_params.ssid = params->ssid;
+	rtw_params.key_mgmt_suite = params->key_mgmt_suite;
+	rtw_params.status = params->status;
+#if (KERNEL_VERSION(5, 1, 0) <= LINUX_VERSION_CODE)
+	if (params->pmkid)
+		_rtw_memcpy(rtw_params.pmkid, params->pmkid, PMKID_LEN);
+#endif
+
+	rtw_cfg80211_external_auth_status(wiphy, dev, &rtw_params);
 
 	return 0;
 }
