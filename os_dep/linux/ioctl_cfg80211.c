@@ -4311,6 +4311,31 @@ static bool rtw_check_connect_sae_compat(struct cfg80211_connect_params *sme)
 #define rtw_check_connect_sae_compat(sme)	false
 #endif
 
+#if (KERNEL_VERSION(4, 17, 0) <= LINUX_VERSION_CODE)
+/*
+ * wpa_supplicant runs SAE through external authentication for this driver,
+ * but in its connect path a network auth_alg setting overrides the SAE
+ * choice, so the request arrives with the SAE AKM and auth type OPEN.
+ * Open System authentication would then end in an association reject with
+ * status 53 (Invalid PMKID). Treat such a request as SAE: start_clnt_auth()
+ * still falls back to Open System when a PMKSA is cached for the BSSID.
+ */
+static bool rtw_check_connect_sae_ext_auth(struct cfg80211_connect_params *sme)
+{
+	if (!(sme->flags & CONNECT_REQ_EXTERNAL_AUTH_SUPPORT))
+		return false;
+
+	if (sme->auth_type != NL80211_AUTHTYPE_OPEN_SYSTEM &&
+	    sme->auth_type != NL80211_AUTHTYPE_AUTOMATIC)
+		return false;
+
+	return sme->crypto.n_akm_suites &&
+	       sme->crypto.akm_suites[0] == WLAN_AKM_SUITE_SAE;
+}
+#else
+#define rtw_check_connect_sae_ext_auth(sme)	false
+#endif
+
 static int cfg80211_rtw_connect(struct wiphy *wiphy, struct net_device *ndev,
 				struct cfg80211_connect_params *sme)
 {
@@ -4338,6 +4363,11 @@ static int cfg80211_rtw_connect(struct wiphy *wiphy, struct net_device *ndev,
 		psecuritypriv->auth_type = MLME_AUTHTYPE_SAE;
 		psecuritypriv->auth_alg = WLAN_AUTH_SAE;
 		RTW_INFO("%s set sme->auth_type for SAE compat\n", __FUNCTION__);
+	}
+
+	if (rtw_check_connect_sae_ext_auth(sme)) {
+		sme->auth_type = NL80211_AUTHTYPE_SAE;
+		RTW_INFO("%s use SAE auth for SAE AKM\n", __FUNCTION__);
 	}
 
 	if (pwdev_priv->block == _TRUE) {
