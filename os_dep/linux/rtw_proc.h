@@ -46,7 +46,7 @@ struct rtw_proc_hdl {
 			size_t size;
 		} sz;
 	} u;
-	ssize_t (*write)(struct file *file, const char __user *buffer, size_t count, loff_t *pos, void *data);
+	ssize_t (*write)(struct file *file, const char __rtw_proc_user *buffer, size_t count, loff_t *pos, void *data);
 };
 
 #define RTW_PROC_HDL_SEQ(_name, _seq_op, _write) \

@@ -46,7 +46,7 @@ void rtw_ft_info_init(struct ft_roam_info *pft)
 }
 
 ssize_t rtw_ft_proc_flags_set(struct file *file,
-	const char __user *buffer, size_t count, loff_t *pos, void *data)
+	const char __rtw_proc_user *buffer, size_t count, loff_t *pos, void *data)
 {
 	struct net_device *dev = data;
 	_adapter *adapter = (_adapter *)rtw_netdev_priv(dev);
@@ -62,7 +62,7 @@ ssize_t rtw_ft_proc_flags_set(struct file *file,
 		return -EFAULT;
 	}
 
-	if (buffer && !copy_from_user(tmp, buffer, count)) {
+	if (buffer && !rtw_proc_copy_in(tmp, buffer, count)) {
 		int num = sscanf(tmp, "%hhx", &flags);
 		if (num == 1)
 			adapter->mlmepriv.ft_roam.ft_flags = flags;
