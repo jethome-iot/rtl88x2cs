@@ -1,0 +1,36 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
+  "enabledManagers": ["github-actions", "custom.regex"],
+  "minimumReleaseAge": "7 days",
+  "internalChecksFilter": "strict",
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "labels": ["dependencies"],
+  "dependencyDashboard": true,
+  "dependencyDashboardTitle": "Renovate: обновления зависимостей",
+  "commitMessagePrefix": "ci:",
+  "commitMessageAction": "update",
+  "pin": { "commitMessageAction": "pin" },
+  "pinDigest": { "commitMessageAction": "pin digest for" },
+  "rollback": { "commitMessageAction": "roll back" },
+  "replacement": { "commitMessageAction": "replace" },
+  "packageRules": [
+    {
+      "description": "CI minor, patch and digest updates in one PR; a major update comes alone.",
+      "matchFileNames": [".github/workflows/**"],
+      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "groupName": "CI, minor and patch"
+    }
+  ],
+  "customManagers": [
+    {
+      "description": "The Renovate image in its own workflow, pinned by digest.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/renovate\\.yml$/"],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>docker)\\s+depName=(?<depName>\\S+)[^\\n]*\\n\\s*\\w+:\\s*[^\\s:]+:(?<currentValue>[\\w][\\w.+-]*)@(?<currentDigest>sha256:[a-f0-9]{64})\\s*\\n"
+      ]
+    }
+  ]
+}

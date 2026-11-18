@@ -1,0 +1,103 @@
+name: renovate
+
+# Dependency updates by a self-hosted Renovate: the CLI runs in its own image on our runners
+# (config: .github/renovate.json), not as a hosted service.
+#
+# The image is pinned by digest: the tag is republished several times a day, and a floating
+# tag would change the code that opens PRs here without a PR here. Renovate bumps its own
+# pin through the `# renovate:` marker line, a custom manager of .github/renovate.json.
+#
+# PRs are opened by the `tvip-renovate` GitHub App (org variable RENOVATE_APP_CLIENT_ID, org
+# secret RENOVATE_APP_PRIVATE_KEY), not by the built-in GITHUB_TOKEN: a GITHUB_TOKEN PR does
+# not start CI of its own. Without the App the run is read-only: nothing is created or
+# changed, the log shows what Renovate found.
+
+on:
+  # Daily, off the start of the hour.
+  schedule:
+    - cron: "23 1 * * *"
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Read-only run: only report what was found"
+        type: boolean
+        default: false
+
+# Writes go through the App token. The built-in token is used only for the read-only
+# fallback, which still reads existing PRs, the Dependency Dashboard and the checks of
+# `renovate/*` branches.
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  checks: read
+  statuses: read
+
+# A repository pass is never cut in the middle: a cancelled run would leave some branches
+# created and others not.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  renovate:
+    runs-on: [self-hosted, ubuntu-latest]
+    timeout-minutes: 30
+    steps:
+      - name: Check that docker is present
+        run: |
+          set -euo pipefail
+          if ! command -v docker >/dev/null; then
+            echo "::error::docker is missing on the runner; Renovate runs as a digest-pinned image"
+            exit 1
+          fi
+          docker version --format '{{.Server.Version}}'
+
+      # The App token; without it the step below falls back to a read-only run.
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: app-token
+        if: vars.RENOVATE_APP_CLIENT_ID != ''
+        with:
+          client-id: ${{ vars.RENOVATE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
+
+      - name: Run Renovate
+        env:
+          # renovate: datasource=docker depName=renovate/renovate
+          IMAGE: renovate/renovate:44.155.1@sha256:f5796f26088c0f5debb07c16fa9e801145e4d3ba9717d9cc22ca8cd265e2a0eb
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          BUILTIN_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          FORCED_DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+
+          token="${APP_TOKEN}"
+          dry_run=""
+          if [[ -z "${token}" ]]; then
+            echo "::notice::GitHub App is not configured; read-only run"
+            token="${BUILTIN_TOKEN}"
+            dry_run="full"
+          elif [[ "${FORCED_DRY_RUN}" == "true" ]]; then
+            echo "::notice::read-only run requested"
+            dry_run="full"
+          fi
+
+          # The token goes through the step environment, not argv: `docker run` arguments
+          # are visible to every process on the runner in `ps`.
+          export RENOVATE_TOKEN="${token}"
+
+          # RENOVATE_EXIT_CODE_FOR_ERRORS turns token permission errors and rejected
+          # configuration into a non-zero exit; without it they only reach the log.
+          args=(
+            -e RENOVATE_PLATFORM=github
+            -e RENOVATE_REPOSITORIES="${REPO}"
+            -e RENOVATE_TOKEN
+            -e RENOVATE_EXIT_CODE_FOR_ERRORS=true
+            -e LOG_LEVEL=info
+          )
+          if [[ -n "${dry_run}" ]]; then
+            args+=(-e "RENOVATE_DRY_RUN=${dry_run}")
+          fi
+
+          docker run --rm "${args[@]}" "${IMAGE}"
