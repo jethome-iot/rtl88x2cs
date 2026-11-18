@@ -96,6 +96,16 @@ jobs:
       # kbuild expects "arm64". TC is splatted into every make call ('' for gcc).
       ARCH: ${{ matrix.arch }}
       TC: ${{ matrix.toolchain == 'llvm' && 'LLVM=1' || '' }}
+      TOOLCHAIN: ${{ matrix.toolchain }}
+      KERNEL_TAG: ${{ matrix.kernel_version }}
+      # Kernel env cache (.github/kenv/kenv.sh): the prepared kernel tree an
+      # external module build reads, one OCI artifact per kernel tag,
+      # toolchain, arch and toolchain version, shared by every branch and
+      # pull request. The registry project is public, so reads need no
+      # login. Fork PRs get no secrets: KENV_HOST is empty there and the cell
+      # builds the tree itself.
+      KENV_HOST: ${{ secrets.CR_HOST }}
+      KENV_REPO: jethome-iot/rtl88x2cs-kenv
 
     steps:
       - name: Checkout code
@@ -117,13 +127,38 @@ jobs:
             dwarves \
             git \
             file \
+            zstd \
             clang \
             lld \
             llvm
       
-      - name: Setup kernel source
+      - name: Install oras
+        if: env.KENV_HOST != ''
+        # Without oras the cell only loses the cache.
+        continue-on-error: true
+        env:
+          # Version and SHA256 of the release tarball move together: Renovate
+          # takes the new SHA256 from the release's checksums file.
+          # renovate: datasource=github-release-attachments depName=oras-project/oras
+          ORAS_X86_64: v1.4.0 d8e1dce2fd8ce996f1d901845b688eb0cf505a6082897606f053825bb47935d1
+          # renovate: datasource=github-release-attachments depName=oras-project/oras
+          ORAS_ARM64: v1.4.0 0791fc200831563e498638d30e8ee8aac20ad1da2610760120fe3f770e12a8a4
         run: |
-          echo "Setting up kernel source for ${{ matrix.kernel_version }} / ${{ matrix.toolchain }}/${{ matrix.arch }}"
+          case "$ARCH" in
+            x86_64) read -r version sha256 <<< "$ORAS_X86_64"; goarch=amd64 ;;
+            arm64) read -r version sha256 <<< "$ORAS_ARM64"; goarch=arm64 ;;
+          esac
+          dir="$RUNNER_TEMP/oras"
+          mkdir -p "$dir"
+          curl -fsSL -o "$dir/oras.tar.gz" \
+            "https://github.com/oras-project/oras/releases/download/$version/oras_${version#v}_linux_$goarch.tar.gz"
+          echo "$sha256  $dir/oras.tar.gz" | sha256sum -c -
+          tar -xzf "$dir/oras.tar.gz" -C "$dir" oras
+          echo "$dir" >> "$GITHUB_PATH"
+
+      - name: Restore kernel env from the registry
+        id: kenv
+        run: |
           TAG="${{ matrix.kernel_version }}"
           # One tree per toolchain/arch combo: the .config differs (CC_IS_CLANG,
           # target arch), and sharing a tree would force a full reconfigure and
@@ -134,6 +169,26 @@ jobs:
             DEST="$DEST-${{ matrix.toolchain }}-${{ matrix.arch }}"
           fi
           echo "KTREE=$DEST" >> "$GITHUB_ENV"
+          # A tree left on the runner is used as before; the cache only
+          # replaces the clone and the build.
+          hit=false
+          if [ ! -d "$DEST" ] && [ -n "$KENV_HOST" ] && command -v oras > /dev/null &&
+             KTAG=$(.github/kenv/kenv.sh tag); then
+            echo "KENV_REF=$KENV_HOST/$KENV_REPO:$KTAG" >> "$GITHUB_ENV"
+            if .github/kenv/kenv.sh restore "$KENV_HOST/$KENV_REPO:$KTAG" "$DEST"; then
+              hit=true
+            fi
+            echo "kernel env $KENV_REPO:$KTAG: $([ "$hit" = true ] && echo restored || echo miss)" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "hit=$hit" >> "$GITHUB_OUTPUT"
+          echo "Kernel env for ${{ matrix.kernel_version }} / ${{ matrix.toolchain }}/${{ matrix.arch }}: $([ "$hit" = true ] && echo 'from the registry cache' || echo 'built in this job')" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Setup kernel source
+        if: steps.kenv.outputs.hit != 'true'
+        run: |
+          echo "Setting up kernel source for ${{ matrix.kernel_version }} / ${{ matrix.toolchain }}/${{ matrix.arch }}"
+          TAG="${{ matrix.kernel_version }}"
+          DEST="$KTREE"
           # Clone the Linux kernel at the given tag. linux-next tags (next-YYYYMMDD)
           # live in the linux-next tree; everything else is a stable/mainline tag.
           if [ ! -d "$DEST" ]; then
@@ -149,54 +204,11 @@ jobs:
           fi
           
       - name: Prepare kernel build environment
+        if: steps.kenv.outputs.hit != 'true'
         run: |
           cd "$KTREE"
-          # Use the arch default config, NOT the runner's distro /boot/config.
-          make $TC defconfig
-          # Enable the kernel options the rtl8822cs module needs so the out-of-tree
-          # build sees complete headers (mirrors Buildroot rtl8822cs.mk CONFIG fixups).
-          scripts/config --enable NET
-          scripts/config --enable WIRELESS
-          scripts/config --enable CFG80211
-          scripts/config --enable MAC80211
-          scripts/config --enable MMC
-          # The arm64 defconfig carries RFKILL=m; in Kconfig tristate arithmetic
-          # CFG80211's dependency "RFKILL || !RFKILL" then evaluates to m, which
-          # caps CFG80211/MAC80211 back to =m on olddefconfig — and =m exports
-          # never reach vmlinux.symvers, so modpost fails the module link with
-          # "cfg80211_* undefined". Force it built-in.
-          scripts/config --enable RFKILL
-          # Disable certificate-related options that require distro-specific files
-          scripts/config --disable SYSTEM_TRUSTED_KEYS
-          scripts/config --disable SYSTEM_REVOCATION_KEYS
-          scripts/config --set-str SYSTEM_TRUSTED_KEYS ""
-          scripts/config --set-str SYSTEM_REVOCATION_KEYS ""
-          # -Werror gate, set explicitly so it does not depend on which arch
-          # defconfig happens to carry CONFIG_WERROR (x86_64 does, arm64 does
-          # not). gcc cells gate on the driver's warnings — the same condition
-          # the Buildroot x86 autobuilder hits — and their classes are at zero.
-          # llvm cells stay informational until the clang-only classes reach
-          # zero too (counted in the summary; only the kernel's default-fatal
-          # diagnostics fail the build) — then enable WERROR here as well.
-          if [ "${{ matrix.toolchain }}" = "gcc" ]; then
-            scripts/config --enable WERROR
-          else
-            scripts/config --disable WERROR
-          fi
-          # Reconcile and prepare for external module builds
-          make $TC olddefconfig
-          # modules_prepare sets up the external-module scaffolding (modpost, modfinal
-          # rules); without it the out-of-tree build dies at __modfinal ("No rule to
-          # make target '88x2cs.ko'"). vmlinux is then a PARTIAL build (no loadable =m
-          # modules, no bzImage; ~5 min vs ~10 for a full make) that emits
-          # vmlinux.symvers with every exported symbol. A complete Module.symvers is
-          # only written by 'make modules', which we don't need — the driver's deps are
-          # all =y, so vmlinux.symvers is complete for it. Copy it to Module.symvers so
-          # a leftover "undefined symbol" means a REAL link break, not a missing symvers.
-          make $TC modules_prepare
-          make -j"$(nproc)" $TC vmlinux
-          cp vmlinux.symvers Module.symvers
-          
+          "$GITHUB_WORKSPACE/.github/kenv/prepare.sh"
+
       - name: Build module
         run: |
           echo "Building rtl88x2cs module for kernel ${{ matrix.kernel_version }} / ${{ matrix.toolchain }}/${{ matrix.arch }}"
@@ -265,3 +277,35 @@ jobs:
             exit 1
           fi
 
+      - name: Publish kernel env to the registry
+        # Every run that has the registry secrets writes: pushes, manual runs
+        # and pull requests from branches of this repository; fork PRs get no
+        # secrets and only read. A tag is never overwritten (kenv.sh push).
+        # The package is pushed only when the driver built against it matches
+        # the build above, and a failure here leaves the cell's result to the
+        # driver build.
+        if: steps.kenv.outputs.hit == 'false' && env.KENV_REF != ''
+        continue-on-error: true
+        env:
+          CR_USER: ${{ secrets.CR_USER }}
+          CR_TOKEN: ${{ secrets.CR_TOKEN }}
+        run: |
+          if [ -z "$CR_USER" ] || [ -z "$CR_TOKEN" ]; then
+            echo "No registry login in this run; the kernel env is not published"
+            exit 0
+          fi
+          PKG="$RUNNER_TEMP/kenv/kenv.tar.zst"
+          rc=0
+          .github/kenv/kenv.sh pack "$KTREE" "$PKG" || rc=$?
+          if [ "$rc" -eq 3 ]; then
+            exit 0
+          fi
+          [ "$rc" -eq 0 ]
+          .github/kenv/kenv.sh verify "$PKG" "$GITHUB_WORKSPACE/88x2cs.ko" "$GITHUB_WORKSPACE"
+          export REGISTRY_CONFIG="$RUNNER_TEMP/kenv/auth.json"
+          # The login stays on the runner only for the push, failed or not.
+          trap 'rm -f "$REGISTRY_CONFIG"' EXIT
+          printf '%s' "$CR_TOKEN" | oras login --registry-config "$REGISTRY_CONFIG" \
+            -u "$CR_USER" --password-stdin "$KENV_HOST"
+          SOURCE_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" SOURCE_REVISION="$GITHUB_SHA" \
+            .github/kenv/kenv.sh push "$KENV_REF" "$PKG"

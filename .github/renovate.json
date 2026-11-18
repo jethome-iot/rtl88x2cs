@@ -1,0 +1,44 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
+  "enabledManagers": ["github-actions", "custom.regex"],
+  "minimumReleaseAge": "7 days",
+  "internalChecksFilter": "strict",
+  "prConcurrentLimit": 5,
+  "prHourlyLimit": 2,
+  "labels": ["dependencies"],
+  "dependencyDashboard": true,
+  "dependencyDashboardTitle": "Renovate: обновления зависимостей",
+  "commitMessagePrefix": "ci:",
+  "commitMessageAction": "update",
+  "pin": { "commitMessageAction": "pin" },
+  "pinDigest": { "commitMessageAction": "pin digest for" },
+  "rollback": { "commitMessageAction": "roll back" },
+  "replacement": { "commitMessageAction": "replace" },
+  "packageRules": [
+    {
+      "description": "CI minor, patch and digest updates in one PR; a major update comes alone.",
+      "matchFileNames": [".github/workflows/**"],
+      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "groupName": "CI, minor and patch"
+    }
+  ],
+  "customManagers": [
+    {
+      "description": "Tools that workflows download from a GitHub release, marked by a `# renovate:` comment line right above a `NAME: <tag> <sha256>` line. Renovate moves the tag and takes the new SHA256 from the release's checksums file.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>github-release-attachments)\\s+depName=(?<depName>\\S+)[^\\n]*\\n\\s*\\w+:\\s*(?<currentValue>v\\d[\\w.+-]*)\\s+(?<currentDigest>[a-f0-9]{64})\\s*\\n"
+      ]
+    },
+    {
+      "description": "The Renovate image in its own workflow, pinned by digest.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^\\.github/workflows/renovate\\.yml$/"],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>docker)\\s+depName=(?<depName>\\S+)[^\\n]*\\n\\s*\\w+:\\s*[^\\s:]+:(?<currentValue>[\\w][\\w.+-]*)@(?<currentDigest>sha256:[a-f0-9]{64})\\s*\\n"
+      ]
+    }
+  ]
+}
