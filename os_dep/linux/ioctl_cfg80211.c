@@ -6800,8 +6800,8 @@ void rtw_cfg80211_external_auth_request(_adapter *padapter, union recv_frame *rf
 	params.ssid.ssid_len = pmlmeinfo->network.Ssid.SsidLength;
 	_rtw_memcpy(params.ssid.ssid, pmlmeinfo->network.Ssid.Ssid,
 		pmlmeinfo->network.Ssid.SsidLength);
-	/* SAE AKM 00-0F-AC:8 in the byte order wpa_supplicant has always accepted */
-	params.key_mgmt_suite = 0x8ac0f00;
+	/* SAE AKM as the selector bytes 00-0F-AC-08, the form every wpa_supplicant accepts */
+	params.key_mgmt_suite = (__force u32)cpu_to_be32(WLAN_AKM_SUITE_SAE);
 
 	cfg80211_external_auth_request(netdev, &params, GFP_ATOMIC);
 #elif (KERNEL_VERSION(2, 6, 37) <= LINUX_VERSION_CODE)
