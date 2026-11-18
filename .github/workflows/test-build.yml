@@ -97,6 +97,12 @@ jobs:
       ARCH: ${{ matrix.arch }}
       TC: ${{ matrix.toolchain == 'llvm' && 'LLVM=1' || '' }}
       TOOLCHAIN: ${{ matrix.toolchain }}
+      KERNEL_TAG: ${{ matrix.kernel_version }}
+      # Kernel env cache (.github/kenv/kenv.sh): the files of a prepared
+      # kernel tree that an external module build reads, one Actions cache
+      # entry per kernel tag, toolchain, arch and toolchain version. The path
+      # is fixed: it is part of the cache version.
+      KENV_DIR: /tmp/kenv-linux
 
     steps:
       - name: Checkout code
@@ -118,13 +124,14 @@ jobs:
             dwarves \
             git \
             file \
+            zstd \
             clang \
             lld \
             llvm
       
-      - name: Setup kernel source
+      - name: Kernel env cache key
+        id: kenv
         run: |
-          echo "Setting up kernel source for ${{ matrix.kernel_version }} / ${{ matrix.toolchain }}/${{ matrix.arch }}"
           TAG="${{ matrix.kernel_version }}"
           # One tree per toolchain/arch combo: the .config differs (CC_IS_CLANG,
           # target arch), and sharing a tree would force a full reconfigure and
@@ -135,6 +142,40 @@ jobs:
             DEST="$DEST-${{ matrix.toolchain }}-${{ matrix.arch }}"
           fi
           echo "KTREE=$DEST" >> "$GITHUB_ENV"
+          echo "key=$(.github/kenv/kenv.sh key)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore kernel env
+        id: kenv-cache
+        # A miss or an unreachable cache server leaves KENV_DIR absent; the
+        # cell then builds the tree itself.
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.KENV_DIR }}
+          key: ${{ steps.kenv.outputs.key }}
+
+      - name: Use the restored kernel env
+        id: kenv-hit
+        env:
+          CACHE_HIT: ${{ steps.kenv-cache.outputs.cache-hit }}
+        run: |
+          hit=false
+          if [ "$CACHE_HIT" = true ]; then
+            if .github/kenv/kenv.sh check "$KENV_DIR"; then
+              echo "KTREE=$KENV_DIR" >> "$GITHUB_ENV"
+              hit=true
+            else
+              rm -rf "$KENV_DIR"
+            fi
+          fi
+          echo "hit=$hit" >> "$GITHUB_OUTPUT"
+          echo "Kernel env for ${{ matrix.kernel_version }} / ${{ matrix.toolchain }}/${{ matrix.arch }}: $([ "$hit" = true ] && echo 'from the Actions cache' || echo 'built in this job')" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Setup kernel source
+        if: steps.kenv-hit.outputs.hit != 'true'
+        run: |
+          echo "Setting up kernel source for ${{ matrix.kernel_version }} / ${{ matrix.toolchain }}/${{ matrix.arch }}"
+          TAG="${{ matrix.kernel_version }}"
+          DEST="$KTREE"
           # Clone the Linux kernel at the given tag. linux-next tags (next-YYYYMMDD)
           # live in the linux-next tree; everything else is a stable/mainline tag.
           if [ ! -d "$DEST" ]; then
@@ -150,6 +191,7 @@ jobs:
           fi
           
       - name: Prepare kernel build environment
+        if: steps.kenv-hit.outputs.hit != 'true'
         run: |
           cd "$KTREE"
           "$GITHUB_WORKSPACE/.github/kenv/prepare.sh"
@@ -222,3 +264,30 @@ jobs:
             exit 1
           fi
 
+      - name: Package kernel env
+        id: kenv-pack
+        # Every run saves on a miss: the cache server scopes entries per
+        # branch like GitHub does, so what a pull request saves only that pull
+        # request reads, and what tune_for_jethub saves every branch reads.
+        # The package is saved only when the driver built against it matches
+        # the build above; a failure here leaves the cell's result to the
+        # driver build.
+        if: steps.kenv-hit.outputs.hit != 'true'
+        continue-on-error: true
+        run: |
+          rc=0
+          .github/kenv/kenv.sh pack "$KTREE" "$KENV_DIR" || rc=$?
+          if [ "$rc" -eq 3 ]; then
+            exit 0
+          fi
+          [ "$rc" -eq 0 ]
+          .github/kenv/kenv.sh verify "$KENV_DIR" "$GITHUB_WORKSPACE/88x2cs.ko" "$GITHUB_WORKSPACE"
+          echo "packed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Save kernel env
+        if: steps.kenv-pack.outputs.packed == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.KENV_DIR }}
+          key: ${{ steps.kenv.outputs.key }}
