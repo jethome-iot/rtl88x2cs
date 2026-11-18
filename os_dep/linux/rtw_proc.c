@@ -19,7 +19,7 @@
 #include "rtw_proc.h"
 #include <rtw_btcoex.h>
 
-#ifdef RTW_PROC_FILES
+#ifdef CONFIG_PROC_DEBUG
 
 static struct proc_dir_entry *rtw_proc = NULL;
 
@@ -106,6 +106,113 @@ static int proc_get_dummy(struct seq_file *m, void *v)
 {
 	return 0;
 }
+
+#ifdef RTW_PROC_KERNEL_BUF
+/*
+ * procfs owns the seq_file of an entry (4f3cd2096fc1, "proc: let procfs own
+ * the seq_file of seq_file entries") and copies writes in (93d68a55b237,
+ * "proc: let procfs copy in writes before pinning the entry"). One proc_ops
+ * serves a whole family of entries, so dispatch to the rtw_proc_hdl whose
+ * index is the data of the entry. ->proc_open() hands the handlers the data
+ * of the parent directory in m->private, as single_open() and seq_open() did.
+ */
+static const struct rtw_proc_hdl *rtw_proc_hdl_of(const struct rtw_proc_hdl *hdls, const struct file *file)
+{
+	return hdls + (ssize_t)PDE_DATA(file_inode(file));
+}
+
+static int rtw_proc_hdl_open(const struct rtw_proc_hdl *hdl, struct inode *inode, struct file *file)
+{
+	struct seq_file *m = file->private_data;
+
+	m->private = proc_get_parent_data(inode);
+	if (hdl->type == RTW_PROC_HDL_TYPE_SZSEQ)
+		return seq_preallocate(m, hdl->u.sz.size);
+
+	return 0;
+}
+
+static int rtw_proc_hdl_show(const struct rtw_proc_hdl *hdl, struct seq_file *m, void *v)
+{
+	int (*show)(struct seq_file *, void *);
+
+	if (hdl->type == RTW_PROC_HDL_TYPE_SZSEQ)
+		show = hdl->u.sz.show;
+	else
+		show = hdl->u.show;
+
+	return show ? show(m, v) : proc_get_dummy(m, v);
+}
+
+static ssize_t rtw_proc_hdl_write(const struct rtw_proc_hdl *hdl, struct file *file, char *buf, size_t count, loff_t *pos)
+{
+	struct seq_file *m = file->private_data;
+
+	if (hdl->write)
+		return hdl->write(file, buf, count, pos, m->private);
+
+	return -EROFS;
+}
+
+/*
+ * rtw_<fam>_proc_seq_fops for RTW_PROC_HDL_TYPE_SEQ and rtw_<fam>_proc_sseq_fops
+ * for RTW_PROC_HDL_TYPE_SSEQ/SZSEQ entries of the table <fam>_proc_hdls.
+ */
+#define RTW_PROC_HDL_FOPS(fam)							\
+static int rtw_##fam##_proc_open(struct inode *inode, struct file *file)	\
+{										\
+	return rtw_proc_hdl_open(rtw_proc_hdl_of(fam##_proc_hdls, file), inode, file); \
+}										\
+										\
+static int rtw_##fam##_proc_show(struct seq_file *m, void *v)			\
+{										\
+	return rtw_proc_hdl_show(rtw_proc_hdl_of(fam##_proc_hdls, m->file), m, v); \
+}										\
+										\
+static void *rtw_##fam##_proc_seq_start(struct seq_file *m, loff_t *pos)	\
+{										\
+	return rtw_proc_hdl_of(fam##_proc_hdls, m->file)->u.seq_op->start(m, pos); \
+}										\
+										\
+static void *rtw_##fam##_proc_seq_next(struct seq_file *m, void *v, loff_t *pos) \
+{										\
+	return rtw_proc_hdl_of(fam##_proc_hdls, m->file)->u.seq_op->next(m, v, pos); \
+}										\
+										\
+static void rtw_##fam##_proc_seq_stop(struct seq_file *m, void *v)		\
+{										\
+	rtw_proc_hdl_of(fam##_proc_hdls, m->file)->u.seq_op->stop(m, v);	\
+}										\
+										\
+static int rtw_##fam##_proc_seq_show(struct seq_file *m, void *v)		\
+{										\
+	return rtw_proc_hdl_of(fam##_proc_hdls, m->file)->u.seq_op->show(m, v); \
+}										\
+										\
+static const struct seq_operations rtw_##fam##_proc_seq_ops = {		\
+	.start = rtw_##fam##_proc_seq_start,					\
+	.next = rtw_##fam##_proc_seq_next,					\
+	.stop = rtw_##fam##_proc_seq_stop,					\
+	.show = rtw_##fam##_proc_seq_show,					\
+};										\
+										\
+static ssize_t rtw_##fam##_proc_write(struct file *file, char *buf, size_t count, loff_t *pos) \
+{										\
+	return rtw_proc_hdl_write(rtw_proc_hdl_of(fam##_proc_hdls, file), file, buf, count, pos); \
+}										\
+										\
+static const struct proc_ops rtw_##fam##_proc_seq_fops = {			\
+	.proc_open = rtw_##fam##_proc_open,					\
+	.proc_seq_ops = &rtw_##fam##_proc_seq_ops,				\
+	.proc_write_buf = rtw_##fam##_proc_write,				\
+};										\
+										\
+static const struct proc_ops rtw_##fam##_proc_sseq_fops = {			\
+	.proc_open = rtw_##fam##_proc_open,					\
+	.proc_show = rtw_##fam##_proc_show,					\
+	.proc_write_buf = rtw_##fam##_proc_write,				\
+}
+#endif /* RTW_PROC_KERNEL_BUF */
 
 static int proc_get_drv_version(struct seq_file *m, void *v)
 {
@@ -226,6 +333,7 @@ const struct rtw_proc_hdl drv_proc_hdls[] = {
 
 const int drv_proc_hdls_num = sizeof(drv_proc_hdls) / sizeof(struct rtw_proc_hdl);
 
+#ifndef RTW_PROC_KERNEL_BUF
 static int rtw_drv_proc_open(struct inode *inode, struct file *file)
 {
 	/* struct net_device *dev = proc_get_parent_data(inode); */
@@ -298,6 +406,9 @@ static const struct rtw_proc_ops rtw_drv_proc_sseq_fops = {
 	.write = rtw_drv_proc_write,
 #endif
 };
+#else
+RTW_PROC_HDL_FOPS(drv);
+#endif /* RTW_PROC_KERNEL_BUF */
 
 int rtw_drv_proc_init(void)
 {
@@ -4877,6 +4988,7 @@ const struct rtw_proc_hdl adapter_proc_hdls[] = {
 
 const int adapter_proc_hdls_num = sizeof(adapter_proc_hdls) / sizeof(struct rtw_proc_hdl);
 
+#ifndef RTW_PROC_KERNEL_BUF
 static int rtw_adapter_proc_open(struct inode *inode, struct file *file)
 {
 	ssize_t index = (ssize_t)PDE_DATA(inode);
@@ -4948,6 +5060,9 @@ static const struct rtw_proc_ops rtw_adapter_proc_sseq_fops = {
 	.write = rtw_adapter_proc_write,
 #endif
 };
+#else
+RTW_PROC_HDL_FOPS(adapter);
+#endif /* RTW_PROC_KERNEL_BUF */
 
 int proc_get_odm_adaptivity(struct seq_file *m, void *v)
 {
@@ -5066,6 +5181,7 @@ const struct rtw_proc_hdl odm_proc_hdls[] = {
 
 const int odm_proc_hdls_num = sizeof(odm_proc_hdls) / sizeof(struct rtw_proc_hdl);
 
+#ifndef RTW_PROC_KERNEL_BUF
 static int rtw_odm_proc_open(struct inode *inode, struct file *file)
 {
 	ssize_t index = (ssize_t)PDE_DATA(inode);
@@ -5137,6 +5253,9 @@ static const struct rtw_proc_ops rtw_odm_proc_sseq_fops = {
 	.write = rtw_odm_proc_write,
 #endif
 };
+#else
+RTW_PROC_HDL_FOPS(odm);
+#endif /* RTW_PROC_KERNEL_BUF */
 
 static struct proc_dir_entry *rtw_odm_proc_init(struct net_device *dev)
 {
@@ -5231,6 +5350,7 @@ const struct rtw_proc_hdl mcc_proc_hdls[] = {
 
 const int mcc_proc_hdls_num = sizeof(mcc_proc_hdls) / sizeof(struct rtw_proc_hdl);
 
+#ifndef RTW_PROC_KERNEL_BUF
 static int rtw_mcc_proc_open(struct inode *inode, struct file *file)
 {
 	ssize_t index = (ssize_t)PDE_DATA(inode);
@@ -5302,6 +5422,9 @@ static const struct rtw_proc_ops rtw_mcc_proc_sseq_fops = {
 	.write = rtw_mcc_proc_write,
 #endif
 };
+#else
+RTW_PROC_HDL_FOPS(mcc);
+#endif /* RTW_PROC_KERNEL_BUF */
 
 struct proc_dir_entry *rtw_mcc_proc_init(struct net_device *dev)
 {
@@ -5478,4 +5601,4 @@ void rtw_adapter_proc_replace(struct net_device *dev)
 
 }
 
-#endif /* RTW_PROC_FILES */
+#endif /* CONFIG_PROC_DEBUG */
