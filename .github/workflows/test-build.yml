@@ -98,11 +98,14 @@ jobs:
       TC: ${{ matrix.toolchain == 'llvm' && 'LLVM=1' || '' }}
       TOOLCHAIN: ${{ matrix.toolchain }}
       KERNEL_TAG: ${{ matrix.kernel_version }}
-      # Kernel env cache (.github/kenv/kenv.sh): the files of a prepared
-      # kernel tree that an external module build reads, one Actions cache
-      # entry per kernel tag, toolchain, arch and toolchain version. The path
-      # is fixed: it is part of the cache version.
-      KENV_DIR: /tmp/kenv-linux
+      # Kernel env cache (.github/kenv/kenv.sh): the prepared kernel tree an
+      # external module build reads, one OCI artifact per kernel tag,
+      # toolchain, arch and toolchain version, shared by every branch and
+      # pull request. The registry project is public, so reads need no
+      # login. Fork PRs get no secrets: KENV_HOST is empty there and the cell
+      # builds the tree itself.
+      KENV_HOST: ${{ secrets.CR_HOST }}
+      KENV_REPO: jethome-iot/rtl88x2cs-kenv
 
     steps:
       - name: Checkout code
@@ -129,7 +132,31 @@ jobs:
             lld \
             llvm
       
-      - name: Kernel env cache key
+      - name: Install oras
+        if: env.KENV_HOST != ''
+        # Without oras the cell only loses the cache.
+        continue-on-error: true
+        env:
+          # Version and SHA256 of the release tarball move together: Renovate
+          # takes the new SHA256 from the release's checksums file.
+          # renovate: datasource=github-release-attachments depName=oras-project/oras
+          ORAS_X86_64: v1.4.0 d8e1dce2fd8ce996f1d901845b688eb0cf505a6082897606f053825bb47935d1
+          # renovate: datasource=github-release-attachments depName=oras-project/oras
+          ORAS_ARM64: v1.4.0 0791fc200831563e498638d30e8ee8aac20ad1da2610760120fe3f770e12a8a4
+        run: |
+          case "$ARCH" in
+            x86_64) read -r version sha256 <<< "$ORAS_X86_64"; goarch=amd64 ;;
+            arm64) read -r version sha256 <<< "$ORAS_ARM64"; goarch=arm64 ;;
+          esac
+          dir="$RUNNER_TEMP/oras"
+          mkdir -p "$dir"
+          curl -fsSL -o "$dir/oras.tar.gz" \
+            "https://github.com/oras-project/oras/releases/download/$version/oras_${version#v}_linux_$goarch.tar.gz"
+          echo "$sha256  $dir/oras.tar.gz" | sha256sum -c -
+          tar -xzf "$dir/oras.tar.gz" -C "$dir" oras
+          echo "$dir" >> "$GITHUB_PATH"
+
+      - name: Restore kernel env from the registry
         id: kenv
         run: |
           TAG="${{ matrix.kernel_version }}"
@@ -142,36 +169,22 @@ jobs:
             DEST="$DEST-${{ matrix.toolchain }}-${{ matrix.arch }}"
           fi
           echo "KTREE=$DEST" >> "$GITHUB_ENV"
-          echo "key=$(.github/kenv/kenv.sh key)" >> "$GITHUB_OUTPUT"
-
-      - name: Restore kernel env
-        id: kenv-cache
-        # A miss or an unreachable cache server leaves KENV_DIR absent; the
-        # cell then builds the tree itself.
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ env.KENV_DIR }}
-          key: ${{ steps.kenv.outputs.key }}
-
-      - name: Use the restored kernel env
-        id: kenv-hit
-        env:
-          CACHE_HIT: ${{ steps.kenv-cache.outputs.cache-hit }}
-        run: |
+          # A tree left on the runner is used as before; the cache only
+          # replaces the clone and the build.
           hit=false
-          if [ "$CACHE_HIT" = true ]; then
-            if .github/kenv/kenv.sh check "$KENV_DIR"; then
-              echo "KTREE=$KENV_DIR" >> "$GITHUB_ENV"
+          if [ ! -d "$DEST" ] && [ -n "$KENV_HOST" ] && command -v oras > /dev/null &&
+             KTAG=$(.github/kenv/kenv.sh tag); then
+            echo "KENV_REF=$KENV_HOST/$KENV_REPO:$KTAG" >> "$GITHUB_ENV"
+            if .github/kenv/kenv.sh restore "$KENV_HOST/$KENV_REPO:$KTAG" "$DEST"; then
               hit=true
-            else
-              rm -rf "$KENV_DIR"
             fi
+            echo "kernel env $KENV_REPO:$KTAG: $([ "$hit" = true ] && echo restored || echo miss)" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
           echo "hit=$hit" >> "$GITHUB_OUTPUT"
-          echo "Kernel env for ${{ matrix.kernel_version }} / ${{ matrix.toolchain }}/${{ matrix.arch }}: $([ "$hit" = true ] && echo 'from the Actions cache' || echo 'built in this job')" >> "$GITHUB_STEP_SUMMARY"
+          echo "Kernel env for ${{ matrix.kernel_version }} / ${{ matrix.toolchain }}/${{ matrix.arch }}: $([ "$hit" = true ] && echo 'from the registry cache' || echo 'built in this job')" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Setup kernel source
-        if: steps.kenv-hit.outputs.hit != 'true'
+        if: steps.kenv.outputs.hit != 'true'
         run: |
           echo "Setting up kernel source for ${{ matrix.kernel_version }} / ${{ matrix.toolchain }}/${{ matrix.arch }}"
           TAG="${{ matrix.kernel_version }}"
@@ -191,7 +204,7 @@ jobs:
           fi
           
       - name: Prepare kernel build environment
-        if: steps.kenv-hit.outputs.hit != 'true'
+        if: steps.kenv.outputs.hit != 'true'
         run: |
           cd "$KTREE"
           "$GITHUB_WORKSPACE/.github/kenv/prepare.sh"
@@ -264,30 +277,35 @@ jobs:
             exit 1
           fi
 
-      - name: Package kernel env
-        id: kenv-pack
-        # Every run saves on a miss: the cache server scopes entries per
-        # branch like GitHub does, so what a pull request saves only that pull
-        # request reads, and what tune_for_jethub saves every branch reads.
-        # The package is saved only when the driver built against it matches
-        # the build above; a failure here leaves the cell's result to the
+      - name: Publish kernel env to the registry
+        # Every run that has the registry secrets writes: pushes, manual runs
+        # and pull requests from branches of this repository; fork PRs get no
+        # secrets and only read. A tag is never overwritten (kenv.sh push).
+        # The package is pushed only when the driver built against it matches
+        # the build above, and a failure here leaves the cell's result to the
         # driver build.
-        if: steps.kenv-hit.outputs.hit != 'true'
+        if: steps.kenv.outputs.hit == 'false' && env.KENV_REF != ''
         continue-on-error: true
+        env:
+          CR_USER: ${{ secrets.CR_USER }}
+          CR_TOKEN: ${{ secrets.CR_TOKEN }}
         run: |
+          if [ -z "$CR_USER" ] || [ -z "$CR_TOKEN" ]; then
+            echo "No registry login in this run; the kernel env is not published"
+            exit 0
+          fi
+          PKG="$RUNNER_TEMP/kenv/kenv.tar.zst"
           rc=0
-          .github/kenv/kenv.sh pack "$KTREE" "$KENV_DIR" || rc=$?
+          .github/kenv/kenv.sh pack "$KTREE" "$PKG" || rc=$?
           if [ "$rc" -eq 3 ]; then
             exit 0
           fi
           [ "$rc" -eq 0 ]
-          .github/kenv/kenv.sh verify "$KENV_DIR" "$GITHUB_WORKSPACE/88x2cs.ko" "$GITHUB_WORKSPACE"
-          echo "packed=true" >> "$GITHUB_OUTPUT"
-
-      - name: Save kernel env
-        if: steps.kenv-pack.outputs.packed == 'true'
-        continue-on-error: true
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ env.KENV_DIR }}
-          key: ${{ steps.kenv.outputs.key }}
+          .github/kenv/kenv.sh verify "$PKG" "$GITHUB_WORKSPACE/88x2cs.ko" "$GITHUB_WORKSPACE"
+          export REGISTRY_CONFIG="$RUNNER_TEMP/kenv/auth.json"
+          # The login stays on the runner only for the push, failed or not.
+          trap 'rm -f "$REGISTRY_CONFIG"' EXIT
+          printf '%s' "$CR_TOKEN" | oras login --registry-config "$REGISTRY_CONFIG" \
+            -u "$CR_USER" --password-stdin "$KENV_HOST"
+          SOURCE_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" SOURCE_REVISION="$GITHUB_SHA" \
+            .github/kenv/kenv.sh push "$KENV_REF" "$PKG"
