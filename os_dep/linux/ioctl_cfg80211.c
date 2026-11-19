@@ -4311,6 +4311,31 @@ static bool rtw_check_connect_sae_compat(struct cfg80211_connect_params *sme)
 #define rtw_check_connect_sae_compat(sme)	false
 #endif
 
+#if (KERNEL_VERSION(4, 17, 0) <= LINUX_VERSION_CODE)
+/*
+ * wpa_supplicant runs SAE through external authentication for this driver,
+ * but in its connect path a network auth_alg setting overrides the SAE
+ * choice, so the request arrives with the SAE AKM and auth type OPEN.
+ * Open System authentication would then end in an association reject with
+ * status 53 (Invalid PMKID). Treat such a request as SAE: start_clnt_auth()
+ * still falls back to Open System when a PMKSA is cached for the BSSID.
+ */
+static bool rtw_check_connect_sae_ext_auth(struct cfg80211_connect_params *sme)
+{
+	if (!(sme->flags & CONNECT_REQ_EXTERNAL_AUTH_SUPPORT))
+		return false;
+
+	if (sme->auth_type != NL80211_AUTHTYPE_OPEN_SYSTEM &&
+	    sme->auth_type != NL80211_AUTHTYPE_AUTOMATIC)
+		return false;
+
+	return sme->crypto.n_akm_suites &&
+	       sme->crypto.akm_suites[0] == WLAN_AKM_SUITE_SAE;
+}
+#else
+#define rtw_check_connect_sae_ext_auth(sme)	false
+#endif
+
 static int cfg80211_rtw_connect(struct wiphy *wiphy, struct net_device *ndev,
 				struct cfg80211_connect_params *sme)
 {
@@ -4338,6 +4363,11 @@ static int cfg80211_rtw_connect(struct wiphy *wiphy, struct net_device *ndev,
 		psecuritypriv->auth_type = MLME_AUTHTYPE_SAE;
 		psecuritypriv->auth_alg = WLAN_AUTH_SAE;
 		RTW_INFO("%s set sme->auth_type for SAE compat\n", __FUNCTION__);
+	}
+
+	if (rtw_check_connect_sae_ext_auth(sme)) {
+		sme->auth_type = NL80211_AUTHTYPE_SAE;
+		RTW_INFO("%s use SAE auth for SAE AKM\n", __FUNCTION__);
 	}
 
 	if (pwdev_priv->block == _TRUE) {
@@ -4760,7 +4790,7 @@ static void _rtw_set_pmksa(struct net_device *ndev,
 
 			_rtw_memcpy(psecuritypriv->PMKIDList[index].PMKID, pmkid, WLAN_PMKID_LEN);
 			psecuritypriv->PMKIDList[index].bUsed = _TRUE;
-			psecuritypriv->PMKIDIndex = index + 1;
+			psecuritypriv->PMKIDIndex = (index + 1) % NUM_PMKID_CACHE;
 			blInserted = _TRUE;
 			break;
 		}
@@ -4776,7 +4806,7 @@ static void _rtw_set_pmksa(struct net_device *ndev,
 
 		psecuritypriv->PMKIDList[psecuritypriv->PMKIDIndex].bUsed = _TRUE;
 		psecuritypriv->PMKIDIndex++ ;
-		if (psecuritypriv->PMKIDIndex == 16)
+		if (psecuritypriv->PMKIDIndex == NUM_PMKID_CACHE)
 			psecuritypriv->PMKIDIndex = 0;
 	}
 }
@@ -6740,7 +6770,10 @@ static int	cfg80211_rtw_assoc(struct wiphy *wiphy, struct net_device *ndev,
 
 void rtw_cfg80211_external_auth_request(_adapter *padapter, union recv_frame *rframe)
 {
-	struct rtw_external_auth_params params;
+#if (KERNEL_VERSION(4, 17, 0) <= LINUX_VERSION_CODE) \
+    || defined(CONFIG_KERNEL_PATCH_EXTERNAL_AUTH)
+	struct cfg80211_external_auth_params params;
+#endif
 	struct wireless_dev *wdev = padapter->rtw_wdev;
 	struct net_device *netdev = wdev_to_ndev(wdev);
 	struct mlme_ext_priv *pmlmeext = &(padapter->mlmeextpriv);
@@ -6756,15 +6789,21 @@ void rtw_cfg80211_external_auth_request(_adapter *padapter, union recv_frame *rf
 
 #if (KERNEL_VERSION(4, 17, 0) <= LINUX_VERSION_CODE) \
     || defined(CONFIG_KERNEL_PATCH_EXTERNAL_AUTH)
-	params.action = EXTERNAL_AUTH_START;
+	/*
+	 * cfg80211 reads every field of its own structure (pmkid since 5.1,
+	 * mld_addr since 6.3), so build that structure and zero the fields
+	 * this driver does not set.
+	 */
+	_rtw_memset(&params, 0, sizeof(params));
+	params.action = NL80211_EXTERNAL_AUTH_START;
 	_rtw_memcpy(params.bssid, get_my_bssid(&pmlmeinfo->network), ETH_ALEN);
 	params.ssid.ssid_len = pmlmeinfo->network.Ssid.SsidLength;
 	_rtw_memcpy(params.ssid.ssid, pmlmeinfo->network.Ssid.Ssid,
 		pmlmeinfo->network.Ssid.SsidLength);
-	params.key_mgmt_suite = 0x8ac0f00;
+	/* SAE AKM as the selector bytes 00-0F-AC-08, the form every wpa_supplicant accepts */
+	params.key_mgmt_suite = (__force u32)cpu_to_be32(WLAN_AKM_SUITE_SAE);
 
-	cfg80211_external_auth_request(netdev,
-		(struct cfg80211_external_auth_params *)&params, GFP_ATOMIC);
+	cfg80211_external_auth_request(netdev, &params, GFP_ATOMIC);
 #elif (KERNEL_VERSION(2, 6, 37) <= LINUX_VERSION_CODE)
 	set_frame_sub_type(frame, WIFI_AUTH);
 
@@ -8179,16 +8218,14 @@ static void cfg80211_rtw_update_mgmt_frame_register(struct wiphy *wiphy,
 #endif
 
 {
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0))
-	u32 rtw_mask = BIT(IEEE80211_STYPE_PROBE_REQ >> 4);
-#endif
-
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 6, 0))
 	struct net_device *ndev = wdev_to_ndev(wdev);
 #endif
 	_adapter *adapter;
-
 	struct rtw_wdev_priv *pwdev_priv;
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0))
+	bool reg;
+#endif
 
 	if (ndev == NULL)
 		goto exit;
@@ -8200,15 +8237,7 @@ static void cfg80211_rtw_update_mgmt_frame_register(struct wiphy *wiphy,
 #ifdef CONFIG_DEBUG_CFG80211
 	RTW_INFO(FUNC_ADPT_FMT" frame_type:%x, reg:%d\n", FUNC_ADPT_ARG(adapter),
 		frame_type, reg);
-#else
-	RTW_INFO(FUNC_ADPT_FMT " old_regs:%x new_regs:%x\n",
-		 FUNC_ADPT_ARG(adapter), pwdev_priv->mgmt_mask, upd->interface_stypes);
 #endif
-#endif
-
-	/* Wait QC Verify */
-	return;
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 8, 0))
 	switch (frame_type) {
 	case IEEE80211_STYPE_AUTH: /* 0x00B0 */
 		if (reg > 0)
@@ -8234,9 +8263,15 @@ static void cfg80211_rtw_update_mgmt_frame_register(struct wiphy *wiphy,
 		break;
 	}
 #else
-	if ((upd->interface_stypes & rtw_mask) == (pwdev_priv->mgmt_mask & rtw_mask))
- 		return;
+	RTW_INFO(FUNC_ADPT_FMT " old_regs:%x new_regs:%x\n",
+		 FUNC_ADPT_ARG(adapter), pwdev_priv->mgmt_mask, upd->interface_stypes);
 
+	/* Same policy as the per-frame callback: report AUTH frames only */
+	reg = upd->interface_stypes & BIT(IEEE80211_STYPE_AUTH >> 4);
+	if (reg)
+		SET_CFG80211_REPORT_MGMT(pwdev_priv, IEEE80211_STYPE_AUTH, reg);
+	else
+		CLR_CFG80211_REPORT_MGMT(pwdev_priv, IEEE80211_STYPE_AUTH, reg);
 
 	pwdev_priv->mgmt_mask = upd->interface_stypes;
 #endif
@@ -10459,11 +10494,26 @@ static int cfg80211_rtw_external_auth(struct wiphy *wiphy, struct net_device *de
 	struct cfg80211_external_auth_params *params)
 {
 	PADAPTER padapter = (_adapter *)rtw_netdev_priv(dev);
+	struct rtw_external_auth_params rtw_params;
 
 	RTW_INFO(FUNC_NDEV_FMT"\n", FUNC_NDEV_ARG(dev));
 
-	rtw_cfg80211_external_auth_status(wiphy, dev,
-		(struct rtw_external_auth_params *)params);
+	/*
+	 * The layouts differ: cfg80211 carries pmkid as a pointer (5.1+),
+	 * rtw_external_auth_params as an array. Copy field by field.
+	 */
+	_rtw_memset(&rtw_params, 0, sizeof(rtw_params));
+	rtw_params.action = (enum external_auth_action)params->action;
+	_rtw_memcpy(rtw_params.bssid, params->bssid, ETH_ALEN);
+	rtw_params.ssid = params->ssid;
+	rtw_params.key_mgmt_suite = params->key_mgmt_suite;
+	rtw_params.status = params->status;
+#if (KERNEL_VERSION(5, 1, 0) <= LINUX_VERSION_CODE)
+	if (params->pmkid)
+		_rtw_memcpy(rtw_params.pmkid, params->pmkid, PMKID_LEN);
+#endif
+
+	rtw_cfg80211_external_auth_status(wiphy, dev, &rtw_params);
 
 	return 0;
 }
