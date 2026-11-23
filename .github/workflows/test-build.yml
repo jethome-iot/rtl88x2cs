@@ -169,8 +169,13 @@ jobs:
             DEST="$DEST-${{ matrix.toolchain }}-${{ matrix.arch }}"
           fi
           echo "KTREE=$DEST" >> "$GITHUB_ENV"
-          # A tree left on the runner is used as before; the cache only
-          # replaces the clone and the build.
+          # A kernel env restored by an earlier job on a persistent runner is
+          # not a prepared tree: the steps below would configure it and fail.
+          # Drop it; a full tree left on the runner is used as before, the
+          # cache only replaces the clone and the build.
+          if [ -f "$DEST/kenv-inputs.txt" ]; then
+            rm -rf "$DEST"
+          fi
           hit=false
           if [ ! -d "$DEST" ] && [ -n "$KENV_HOST" ] && command -v oras > /dev/null &&
              KTAG=$(.github/kenv/kenv.sh tag); then
