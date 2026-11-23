@@ -4047,6 +4047,18 @@ static int rtw_cfg80211_set_wpa_ie(_adapter *padapter, u8 *pie, size_t ielen)
 		}
 	}
 
+	{/* RSNXE: send it to the AP as userspace built it */
+		sint rsnx_ielen = 0;
+		u8 *rsnx_ie;
+
+		rsnx_ie = rtw_get_ie(buf, EID_RSNX, &rsnx_ielen, ielen);
+		if (rsnx_ie && rsnx_ielen + 2 <= MAX_RSNX_IE_LEN) {
+			RTW_INFO("got rsnx_ie, rsnx_ielen:%d\n", rsnx_ielen + 2);
+			padapter->securitypriv.rsnx_ie_len = rsnx_ielen + 2;
+			_rtw_memcpy(padapter->securitypriv.rsnx_ie, rsnx_ie, rsnx_ielen + 2);
+		}
+	}
+
 	#ifdef CONFIG_P2P
 	{/* check p2p_ie for assoc req; */
 		uint p2p_ielen = 0;
@@ -4442,6 +4454,7 @@ static int cfg80211_rtw_connect(struct wiphy *wiphy, struct net_device *ndev,
 	psecuritypriv->ndisauthtype = Ndis802_11AuthModeOpen;
 	psecuritypriv->auth_alg = WLAN_AUTH_OPEN;
 	psecuritypriv->extauth_status = WLAN_STATUS_UNSPECIFIED_FAILURE;
+	psecuritypriv->rsnx_ie_len = 0;
 
 #ifdef CONFIG_WAPI_SUPPORT
 	padapter->wapiInfo.bWapiEnable = false;

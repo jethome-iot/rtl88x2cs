@@ -713,6 +713,7 @@ typedef	enum _ELEMENT_ID {
 	EID_VHTOperation 			= 192, /* Based on 802.11ac D2.0 */
 	EID_AID						= 197, /* Based on 802.11ac D4.0 */
 	EID_OpModeNotification		= 199, /* Based on 802.11ac D3.0 */
+	EID_RSNX					= 244, /* RSN Extension */
 } ELEMENT_ID, *PELEMENT_ID;
 
 /* ---------------------------------------------------------------------------
