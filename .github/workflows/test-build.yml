@@ -220,12 +220,14 @@ jobs:
           #   =return-type / ...), i.e. real API breakage like on linux-next.
           # -k (keep-going): compile every file even after an error, so the by-type
           #   tally below is COMPLETE (without it the build stops at the first file).
+          # -j: the driver's ~180 objects compile in parallel; the sub-make into
+          #   the kernel tree inherits the job server.
           # No KBUILD_MODPOST_WARN: with Module.symvers in place (see Prepare) modpost
           #   resolves the real exports, so a remaining "undefined symbol" is a genuine
           #   link break (removed/renamed kernel API) and MUST fail the build.
           set -o pipefail
           rc=0
-          make -k $TC KSRC="$KTREE" \
+          make -k -j"$(nproc)" $TC KSRC="$KTREE" \
                2>&1 | tee "$LOG" || rc=$?
 
           # Count diagnostics by type (gcc prints the class in brackets, e.g.
