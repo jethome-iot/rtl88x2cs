@@ -293,6 +293,9 @@ jobs:
         # driver build.
         if: steps.kenv.outputs.hit == 'false' && env.KENV_REF != ''
         continue-on-error: true
+        # A hung registry call must not hold the runner until the job timeout;
+        # pack, verify and push take 2-3 minutes on arm64.
+        timeout-minutes: 20
         env:
           CR_USER: ${{ secrets.CR_USER }}
           CR_TOKEN: ${{ secrets.CR_TOKEN }}

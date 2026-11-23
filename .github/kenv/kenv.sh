@@ -44,7 +44,7 @@ first_line() { "$@" 2>/dev/null | head -n 1 || true; }
 inputs() {
   local os
   # shellcheck source=/dev/null
-  os=$(. /etc/os-release && echo "$ID $VERSION_ID")
+  os=$(. /etc/os-release && echo "${ID:-} ${VERSION_ID:-}")
   printf '%s\t%s\n' \
     format "$FORMAT" \
     kernel "$KERNEL_TAG" \
@@ -146,9 +146,12 @@ text_digest() {
   rm -f "$tmp"
 }
 
-verify() {
+# A subshell, so the EXIT trap removes the scratch directory on every way
+# out, set -e included: persistent runners keep /tmp.
+verify() (
   local file=$1 ko=$2 repo=$3 tmp rc=0
   tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
   mkdir -p "$tmp/ktree" "$tmp/src"
   zstd -dcq "$file" | tar -xf - -C "$tmp/ktree"
   cc_matches "$tmp/ktree"
@@ -157,16 +160,13 @@ verify() {
   if [ "$rc" -ne 0 ] || [ ! -f "$tmp/src/88x2cs.ko" ]; then
     tail -n 50 "$tmp/build.log" >&2
     echo "kenv: the driver does not build against the package (rc=$rc)" >&2
-    rm -rf "$tmp"
     return 1
   fi
   if ! diff <(text_digest "$ko") <(text_digest "$tmp/src/88x2cs.ko") >&2; then
     echo "kenv: code built against the package differs from the full tree's" >&2
-    rm -rf "$tmp"
     return 1
   fi
-  rm -rf "$tmp"
-}
+)
 
 push() {
   local ref=$1 file=$2 name value
