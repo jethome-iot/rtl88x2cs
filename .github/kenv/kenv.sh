@@ -109,7 +109,9 @@ restore() {
   rm -rf "$tmp"
 }
 
-pack() {
+# A subshell, so the EXIT trap removes the staging directory on every way
+# out, set -e included: persistent runners keep /tmp.
+pack() (
   local ktree=$1 out=$2 stage
   ktree=$(readlink -f "$ktree")
   # The kernel's own list of what an external module build needs; kernels
@@ -121,6 +123,7 @@ pack() {
     return 3
   fi
   stage=$(mktemp -d)
+  trap 'rm -rf "$stage"' EXIT
   # The script copies with tar, which keeps the mtimes.
   make -C "$ktree" -s $TC run-command \
        KBUILD_RUN_COMMAND="\$(srctree)/scripts/package/install-extmod-build $stage/kenv"
@@ -129,9 +132,8 @@ pack() {
   inputs > "$stage/kenv/kenv-inputs.txt"
   mkdir -p "$(dirname "$out")"
   tar -C "$stage/kenv" --numeric-owner -cf - . | zstd -q -T0 -10 -o "$out" -f
-  rm -rf "$stage"
   ls -l "$out" >&2
-}
+)
 
 # The code sections of a module, one 'name sha256' line each. Data sections
 # are left out: they carry __FILE__ strings, which name the source and kernel
