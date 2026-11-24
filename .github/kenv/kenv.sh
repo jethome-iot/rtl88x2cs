@@ -174,10 +174,13 @@ push() {
   local ref=$1 file=$2 name value
   local -a ann
   local err
-  # Tags are never overwritten: the first package pushed under a tag stays.
-  # Checked right before the push, so a tag pushed by a parallel run during
-  # this run's build is kept as well. Only a definite "not found" lets the
-  # push go: any other answer leaves the tag alone.
+  # An existing tag is not overwritten. The check runs right before the
+  # push, so a tag pushed by a parallel run during this run's build is kept
+  # as well; only a definite "not found" lets the push go. The check and
+  # the push are two requests: two runs that both see "not found" within
+  # those seconds both push, and the later one wins. Both packages passed
+  # verify for the same inputs. A tag immutability rule in the registry
+  # makes the second push fail instead.
   if err=$(oras manifest fetch ${KENV_ORAS_FLAGS:-} --registry-config "$REGISTRY_CONFIG" \
              --descriptor "$ref" 2>&1 > /dev/null); then
     echo "kenv: $ref exists; not pushed" >&2
