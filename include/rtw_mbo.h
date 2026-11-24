@@ -85,14 +85,14 @@ void rtw_mbo_build_exented_cap(
 	_adapter *padapter, u8 **pframe, struct pkt_attrib *pattrib);
 
 ssize_t rtw_mbo_proc_non_pref_chans_set(
-	struct file *pfile, const char __user *buffer, 
+	struct file *pfile, const char __rtw_proc_user *buffer, 
 	size_t count, loff_t *pos, void *pdata);
 
 int rtw_mbo_proc_non_pref_chans_get(
 	struct seq_file *m, void *v);
 
 ssize_t rtw_mbo_proc_cell_data_set(
-	struct file *pfile, const char __user *buffer,
+	struct file *pfile, const char __rtw_proc_user *buffer,
 	size_t count, loff_t *pos, void *pdata);
 
 int rtw_mbo_proc_cell_data_get(

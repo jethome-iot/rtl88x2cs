@@ -55,6 +55,29 @@
 #include <linux/kthread.h>
 #include <linux/list.h>
 #include <linux/vmalloc.h>
+#include <linux/proc_fs.h>
+
+/*
+ * 93d68a55b237 ("proc: let procfs copy in writes before pinning the entry")
+ * hands writes to ->proc_write_buf() as a NUL-terminated kernel copy, and
+ * 4b0ecffbbece ("proc: drop ->proc_write()") removes the method that got the
+ * user buffer. PROC_IOCTL_ARG() comes with the same series; test for it, not
+ * for the kernel version: linux-next reports the version of the last -rc
+ * until the merge window closes. The proc write handlers take their buffer
+ * as const char __rtw_proc_user * and copy it with rtw_proc_copy_in().
+ */
+#ifdef PROC_IOCTL_ARG
+#define RTW_PROC_KERNEL_BUF
+#define __rtw_proc_user
+static inline unsigned long rtw_proc_copy_in(void *to, const void *from, unsigned long n)
+{
+	memcpy(to, from, n);
+	return 0;
+}
+#else
+#define __rtw_proc_user __user
+#define rtw_proc_copy_in copy_from_user
+#endif
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 4, 0))
 	#include <uapi/linux/sched/types.h>
