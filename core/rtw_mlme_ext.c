@@ -9148,6 +9148,15 @@ void _issue_assocreq(_adapter *padapter, u8 is_reassoc)
 
 		i += (pIE->Length + 2);
 	}
+
+	/* RSNXE follows VHT Capabilities and Operating Mode Notification */
+	if (padapter->securitypriv.rsnx_ie_len > 0) {
+		_rtw_memcpy(pframe, padapter->securitypriv.rsnx_ie,
+			    padapter->securitypriv.rsnx_ie_len);
+		pframe += padapter->securitypriv.rsnx_ie_len;
+		pattrib->pktlen += padapter->securitypriv.rsnx_ie_len;
+	}
+
 #ifdef CONFIG_RTW_TOKEN_BASED_XMIT
 	if (padapter->tbtx_capability == _TRUE)
 		pframe = rtw_set_ie(pframe, _VENDOR_SPECIFIC_IE_, 8 , REALTEK_TBTX_IE, &(pattrib->pktlen));

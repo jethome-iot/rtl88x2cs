@@ -1353,6 +1353,7 @@ struct ieee80211_txb {
 #define MAX_WPA_IE_LEN (256)
 #define MAX_WPS_IE_LEN (512)
 #define MAX_OWE_IE_LEN (128)
+#define MAX_RSNX_IE_LEN (257)
 #define MAX_P2P_IE_LEN (256)
 #define MAX_WFD_IE_LEN (128)
 

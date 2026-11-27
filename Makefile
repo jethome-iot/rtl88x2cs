@@ -88,6 +88,10 @@ CONFIG_RTW_IOT_CCK_PD_INIT = n
 CONFIG_RTW_DISABLE_HW_PDN = n
 # user priority mapping rule : tos, dscp
 CONFIG_RTW_UP_MAPPING_RULE = tos
+# CONFIG_RTW_MBO also enables 802.11r (CONFIG_RTW_80211R). Keep it off: the FT
+# code handles FT-PSK and FT-802.1X only, and with update_ft_ies present
+# wpa_supplicant prefers FT-SAE on WPA3 networks with 802.11r, which this
+# driver does not implement.
 CONFIG_RTW_MBO = n
 
 ########################## Android ###########################
